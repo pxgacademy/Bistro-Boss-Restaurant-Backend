@@ -36,11 +36,37 @@ async function run() {
     const menuCollection = dataBase.collection("menu");
     const rewardCollection = dataBase.collection("rewards");
 
+    // Get category counts
+    app.get("/menu/category-counts", async (req, res) => {
+      try {
+        const categoryCounts = await menuCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$category", // Group by category field
+                count: { $sum: 1 }, // Count the number of items in each category
+              },
+            },
+          ])
+          .toArray();
+        res.json(categoryCounts);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send("Error fetching category counts");
+      }
+    });
+
     // get menu by filtered by category
     app.get("/menu", async (req, res) => {
       const category = req.query.category;
       const menu = await menuCollection.find({ category }).toArray();
       res.json(menu);
+    });
+
+    // get all rewards
+    app.get("/rewards", async (req, res) => {
+      const rewards = await rewardCollection.find().toArray();
+      res.json(rewards);
     });
 
     // // Send a ping to confirm a successful connection
