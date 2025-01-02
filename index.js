@@ -35,8 +35,10 @@ async function run() {
     const dataBase = client.db("BistroBossDB");
     const menuCollection = dataBase.collection("menu");
     const rewardCollection = dataBase.collection("rewards");
+    const orderCollection = dataBase.collection("orders");
+    const userCollection = dataBase.collection("users");
 
-    // Get category counts
+    // Get category counts for pagination of UI
     app.get("/menu/category-counts", async (req, res) => {
       try {
         const categoryCounts = await menuCollection
@@ -51,22 +53,50 @@ async function run() {
           .toArray();
         res.json(categoryCounts);
       } catch (err) {
-        console.error(err);
-        res.status(500).send("Error fetching category counts");
+        res.status(500).send({
+          message: "Error fetching category counts",
+          error: err,
+        });
       }
     });
 
     // get menu by filtered by category
     app.get("/menu", async (req, res) => {
-      const category = req.query.category;
-      const menu = await menuCollection.find({ category }).toArray();
-      res.json(menu);
+      const { category } = req.query;
+      const skip = parseInt(req.query.skip);
+      const limit = parseInt(req.query.limit);
+
+      if (limit) {
+        const menu = await menuCollection
+          .find({ category })
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+        res.json(menu);
+      } else {
+        const menu = await menuCollection.find({ category }).toArray();
+        res.json(menu);
+      }
     });
 
     // get all rewards
     app.get("/rewards", async (req, res) => {
       const rewards = await rewardCollection.find().toArray();
       res.json(rewards);
+    });
+
+    // post a customer's order
+    app.post("/order-foods", async (req, res) => {
+      try {
+        const food = req.body;
+        const result = await orderCollection.insertOne(food);
+        res.status(200).send(result);
+      } catch (error) {
+        res.send({
+          message: "Error creating order",
+          error: error,
+        });
+      }
     });
 
     // // Send a ping to confirm a successful connection
