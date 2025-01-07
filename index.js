@@ -5,6 +5,7 @@ const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
 require("dotenv").config();
 const app = express();
+const jwtSecret = process.env.ACCESS_TOKEN_SECRET;
 const port = process.env.PORT || 5000;
 
 // Middleware
@@ -16,6 +17,33 @@ app.use(
     credentials: true,
   })
 );
+
+// JWT token verification middleware
+const verifyToken = (req, res, next) => {
+  const token = req?.headers?.authorization?.split(" ")[1];
+  if (!token)
+    return res
+      .status(401)
+      .send({ message: "Access denied. No token provided." });
+  jwt.verify(token, jwtSecret, (err, decoded) => {
+    if (err)
+      return res.status(403).send({ message: "Access denied. Invalid token." });
+    req.user = decoded;
+    next();
+  });
+};
+
+// verify admin after verify token
+const verifyAdmin = async (req, res, next) => {
+  const email = req.user.email;
+  const user = await userCollection.findOne({ email });
+  const isAdmin = user?.role === "admin";
+  if (!isAdmin)
+    return res
+      .status(403)
+      .send({ message: "Access denied. You are not an admin." });
+  next();
+};
 
 // const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.rm6ii.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -37,6 +65,14 @@ async function run() {
     const reviewCollection = dataBase.collection("reviews");
     const cartCollection = dataBase.collection("carts");
     const userCollection = dataBase.collection("users");
+
+    // jwt functionalities =======================================
+    // signature jwt
+    app.post("/jwt", async (req, res) => {
+      const user = req.body;
+      const token = jwt.sign(user, jwtSecret, { expiresIn: "23h" });
+      res.send({ token });
+    });
 
     // Get category counts for pagination of UI
     app.get("/menu/category-counts", async (req, res) => {
@@ -150,7 +186,7 @@ async function run() {
     // users functionalities =======================================
 
     // get all users
-    app.get("/users", async (req, res) => {
+    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
       const users = await userCollection.find().toArray();
       res.send(users);
     });
@@ -163,6 +199,19 @@ async function run() {
         { projection: { _id: 1 } }
       );
       res.status(200).send(user._id);
+    });
+
+    // check user is admin or customer
+    app.get("/users/admin/:email", verifyToken, async (req, res) => {
+      const { email } = req.params;
+      const tokenEmail = req.user.email;
+      if (tokenEmail !== email)
+        return res.status(403).send({ message: "Forbidden access" });
+
+      let admin = false;
+      const user = await userCollection.findOne({ email: email });
+      if (user && user?.role) admin = user?.role === "admin";
+      res.send({ admin });
     });
 
     // create a single user
@@ -183,8 +232,18 @@ async function run() {
       }
     });
 
+    // make admin to a single user by patch request
+    app.patch("/users/admin/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = new ObjectId(req.params.id);
+      const result = await userCollection.updateOne(
+        { _id: id },
+        { $set: {role: "admin"} }
+      );
+      res.send(result);
+    });
+
     // delete a single user filtered by _id
-    app.delete("/users/:id", async (req, res) => {
+    app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = new ObjectId(req.params.id);
       const result = await userCollection.deleteOne({ _id: id });
       res.send(result);
