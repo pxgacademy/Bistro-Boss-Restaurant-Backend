@@ -104,6 +104,11 @@ async function run() {
       const skip = parseInt(req.query.skip);
       const limit = parseInt(req.query.limit);
 
+      if (!category && !skip && !limit) {
+        const menu = await menuCollection.find().toArray();
+        return res.send(menu);
+      }
+
       if (limit) {
         const menu = await menuCollection
           .find({ category })
@@ -117,10 +122,24 @@ async function run() {
       }
     });
 
+    // get a single menu item filtered by _id
+    app.get("/menu/:id", async (req, res) => {
+      const id = new ObjectId(req.params.id);
+      const menuItem = await menuCollection.findOne({ _id: id });
+      res.send(menuItem);
+    });
+
     // post a menu item
     app.post("/menu", verifyToken, verifyAdmin, async (req, res) => {
       const menuItem = req.body;
       const result = await menuCollection.insertOne(menuItem);
+      res.send(result);
+    });
+
+    // delete a menu item filtered by _id
+    app.delete("/menu/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = new ObjectId(req.params.id);
+      const result = await menuCollection.deleteOne({ _id: id });
       res.send(result);
     });
 
