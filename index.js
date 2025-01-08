@@ -136,6 +136,17 @@ async function run() {
       res.send(result);
     });
 
+    // update a single item filtered by _id
+    app.put("/menu/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = new ObjectId(req.params.id);
+      const updatedItem = req.body;
+      const result = await menuCollection.updateOne(
+        { _id: id },
+        { $set: updatedItem }
+      );
+      res.send(result);
+    });
+
     // delete a menu item filtered by _id
     app.delete("/menu/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = new ObjectId(req.params.id);
