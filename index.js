@@ -1,12 +1,14 @@
+require("dotenv").config();
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
-require("dotenv").config();
 const app = express();
-const jwtSecret = process.env.ACCESS_TOKEN_SECRET;
 const port = process.env.PORT || 5000;
+const jwtSecret = process.env.ACCESS_TOKEN_SECRET;
+const stripeToken = process.env.STRIPE_TOKEN;
+const stripe = require("stripe")(stripeToken);
 
 // Middleware
 app.use(cookieParser());
@@ -48,11 +50,12 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Collections
-    const dataBase = client.db("BistroBossDB");
+    const dataBase = client.db("BistroBoss");
     const menuCollection = dataBase.collection("menu");
     const reviewCollection = dataBase.collection("reviews");
     const cartCollection = dataBase.collection("carts");
     const userCollection = dataBase.collection("users");
+    const paymentHistoryCollection = dataBase.collection("payment_history");
 
     // jwt functionalities =======================================
     // signature jwt
@@ -157,19 +160,16 @@ async function run() {
     // carts functionalities =======================================
 
     // get all carts filtered by single user
-    app.get("/carts", async (req, res) => {
+    app.get("/carts", verifyToken, async (req, res) => {
       const { query } = req.query;
-      // const carts = await cartCollection
-      //   .find({ customer_email: query })
-      //   .toArray();
       const carts = await cartCollection
         .aggregate([
           { $match: { customer_email: query } },
           {
             $lookup: {
               from: "menu",
-              localField: "menuId",
-              foreignField: "_id",
+              let: { menuId: { $toObjectId: "$menuId" } },
+              pipeline: [{ $match: { $expr: { $eq: ["$_id", "$$menuId"] } } }],
               as: "menuDetails",
             },
           },
@@ -290,6 +290,137 @@ async function run() {
       const result = await userCollection.deleteOne({ _id: id });
       res.send(result);
     });
+
+    // payment intent
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+
+      try {
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: amount,
+          currency: "usd",
+          payment_method_types: ["card"],
+        });
+        res.status(200).send({ clientSecret: paymentIntent.client_secret });
+      } catch (error) {
+        res.status(500).send({ error: error.message });
+      }
+    });
+
+    // get all payment histories
+    app.get("/payment-history/:email", verifyToken, async (req, res) => {
+      const { email } = req.params;
+      if (email !== req?.user?.email)
+        return res.status(403).send({ message: "Forbidden access" });
+
+      const paymentHistories = await paymentHistoryCollection
+        .find({ email })
+        .toArray();
+      res.send(paymentHistories);
+    });
+
+    // add payment history
+    app.post("/payment-history", async (req, res) => {
+      const history = req.body;
+      const paymentHistory = await paymentHistoryCollection.insertOne(history);
+
+      const query = {
+        _id: {
+          $in: history.cartIds.map((id) => new ObjectId(id)),
+        },
+      };
+
+      const deleteOrders = await cartCollection.deleteMany(query);
+      res.send({ paymentHistory, deleteOrders });
+    });
+
+    // admin analytics
+    app.get("/admin-analytics", async (req, res) => {
+      const users = await userCollection.estimatedDocumentCount();
+      const items = await menuCollection.estimatedDocumentCount();
+      const orders = await paymentHistoryCollection.estimatedDocumentCount();
+      const result = await paymentHistoryCollection
+        .aggregate([
+          { $group: { _id: null, totalSales: { $sum: "$total_price" } } },
+          { $project: { _id: 0, totalSales: 1 } },
+        ])
+        .toArray();
+      const revenue = result?.[0] ? result[0].totalSales : 0;
+      res.send({ users, items, orders, revenue });
+    });
+
+    // order analytics
+    // app.get("/order-analytics", async (req, res) => {
+    //   const orders = await paymentHistoryCollection
+    //    .aggregate([
+    //       {
+    //         $group: {
+    //           _id: { month: { $month: "$date" }, year: { $year: "$date" } },
+    //           totalOrders: { $sum: 1 },
+    //           totalSales: { $sum: "$total_price" },
+    //         },
+    //       },
+    //       {
+    //         $project: {
+    //           _id: 0,
+    //           month: "$_id.month",
+    //           year: "$_id.year",
+    //           totalOrders: 1,
+    //           averageSales: { $divide: ["$totalSales", "$totalOrders"] },
+    //         },
+    //       },
+    //       {
+    //         $sort: { year: 1, month: 1 },
+    //       },
+    //     ])
+    //    .toArray();
+    //   res.send(orders);
+    // });
+
+    app.get("/order-analytics", async (req, res) => {
+      const result = await paymentHistoryCollection
+        .aggregate([
+          {
+            $unwind: "$menuIds",
+          },
+          {
+            $lookup: {
+              from: "menu",
+              let: { menuIds: { $toObjectId: "$menuIds" } },
+              pipeline: [{ $match: { $expr: { $eq: ["$_id", "$$menuIds"] } } }],
+              as: "menuDetails",
+            },
+          },
+          {
+            $unwind: "$menuDetails",
+          },
+          {
+            $group: {
+              _id: "$menuDetails.category",
+              quantity: { $sum: 1 },
+              revenue: { $sum: "$menuDetails.price" },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              category: "$_id",
+              quantity: 1,
+              revenue: 1,
+              averagePrice: { $divide: ["$revenue", "$quantity"] },
+            },
+          }
+        ])
+        .toArray();
+      res.send(result);
+    });
+
+    // error handling
+    // app.use((err, req, res, next) => {
+    //   console.error(err.stack);
+    //   res.status(500).send({ message: "Something went wrong" });
+    // });
 
     // // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
